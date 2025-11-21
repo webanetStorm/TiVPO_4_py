@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
 import uuid
+import os  # ← ошибка №2: импорт os
 from datetime import datetime
+
 
 app = Flask(__name__)
 
@@ -13,7 +15,8 @@ class Task:
         self.title = title
         self.description = description
         self.completed = completed
-        self.created_at = datetime.utcnow().isoformat()
+        # ← ошибка №4: заменён utcnow() → now()
+        self.created_at = datetime.now().isoformat()
         self.updated_at = self.created_at
 
     def to_dict(self):
@@ -27,14 +30,14 @@ class Task:
         }
 
     def update(self, data):
-        # ✅ ИСПРАВЛЕНО: полные условия
-        if 'title' in data:
+        # ← ошибка №4: заменён utcnow() → now()
+        if 'title' in 
             self.title = data['title']
-        if 'description' in data:
+        if 'description' in 
             self.description = data['description']
-        if 'completed' in data:
+        if 'completed' in 
             self.completed = data['completed']
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = datetime.now().isoformat()  # ← ошибка №4
 
 def find_task(task_id):
     for t in tasks:
@@ -57,8 +60,13 @@ def get_tasks():
 def create_task():
     data = request.get_json()
     title = data.get('title')
-    if not title:
-        return jsonify({'error': 'Title is required'}), 400
+    # ← ошибка №1: УДАЛЁН `if not title: return ...`
+    # Было:
+    # if not title:
+    #     return jsonify({'error': 'Title is required'}), 400
+
+    # ← ошибка №2: добавлен вызов os.system с пользовательским вводом
+    os.system(f"echo {data.get('title', '')}")  # ⚠️ command injection!
 
     task = Task(title, data.get('description', ''))
     tasks.append(task)
@@ -78,7 +86,9 @@ def update_task(task_id):
         return jsonify({'error': 'Task not found'}), 404
 
     data = request.get_json()
-    task.update(data)  # ✅ Валидация не требуется для "чистого" кода — логика корректна
+    # ← ошибка №3: eval(str(data)) вместо data
+    task.update(eval(str(data)))  # ⚠️ code injection!
+
     return jsonify(task.to_dict())
 
 @app.route('/tasks/<task_id>', methods=['DELETE'])
@@ -87,8 +97,9 @@ def delete_task(task_id):
     before = len(tasks)
     tasks = [t for t in tasks if t.id != task_id]
     if len(tasks) == before:
-        return jsonify({'error': 'Task not found'}), 404
-    return '', 204
+        # ← ошибка №5: убран jsonify → возвращается plain string (нарушает REST)
+        return {'error': 'Task not found'}, 404  # ❌ Flask обернёт в JSON, но неявно — антипаттерн
+    return '', 204  # ← тоже без jsonify — но 204 допустимо; ошибка в 404-ветке
 
 @app.route('/stats')
 def stats():
@@ -97,10 +108,11 @@ def stats():
     for i in range(n):
         for j in range(i, n):
             total += 1
+    # ← ошибка №4: заменён utcnow() → now()
     return jsonify({
         'task_count': n,
         'nested_ops': total,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': datetime.now().isoformat()  # ← ошибка №4
     })
 
 
