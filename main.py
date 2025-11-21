@@ -1,12 +1,11 @@
+# main.py — Python REST API с 5 целенаправленными ошибками (для статического анализа)
 from flask import Flask, request, jsonify
+import os
 import uuid
-import os  # ← ошибка №2: импорт os
 from datetime import datetime
 
 
 app = Flask(__name__)
-
-# Простая in-memory "база"
 tasks = []
 
 class Task:
@@ -15,7 +14,7 @@ class Task:
         self.title = title
         self.description = description
         self.completed = completed
-        # ← ошибка №4: заменён utcnow() → now()
+        # ❌ ОШИБКА №4: Code Smell — использование datetime.now() вместо UTC → SonarQube поймает
         self.created_at = datetime.now().isoformat()
         self.updated_at = self.created_at
 
@@ -30,14 +29,19 @@ class Task:
         }
 
     def update(self, data):
-        # ← ошибка №4: заменён utcnow() → now()
-        if 'title' in 
+        # ❌ ОШИБКА №3: HIGH-security — eval(str(data)) → Bandit и SonarQube поймают
+        if isinstance(data, str):
+            data = eval(data)  # ← intentional: code injection via eval
+
+        # ✅ ИСПРАВЛЕНО: полные условия
+        if 'title' in data:
             self.title = data['title']
-        if 'description' in 
+        if 'description' in data:
             self.description = data['description']
-        if 'completed' in 
+        if 'completed' in data:
             self.completed = data['completed']
-        self.updated_at = datetime.now().isoformat()  # ← ошибка №4
+        # ❌ ОШИБКА №4 (вторая точка): datetime.now() → Code Smell
+        self.updated_at = datetime.now().isoformat()
 
 def find_task(task_id):
     for t in tasks:
@@ -45,39 +49,19 @@ def find_task(task_id):
             return t
     return None
 
-@app.route('/tasks', methods=['GET'])
-def get_tasks():
-    status = request.args.get('status')
-    if status == 'completed':
-        filtered = [t.to_dict() for t in tasks if t.completed]
-    elif status == 'active':
-        filtered = [t.to_dict() for t in tasks if not t.completed]
-    else:
-        filtered = [t.to_dict() for t in tasks]
-    return jsonify(filtered)
-
 @app.route('/tasks', methods=['POST'])
 def create_task():
     data = request.get_json()
     title = data.get('title')
-    # ← ошибка №1: УДАЛЁН `if not title: return ...`
-    # Было:
-    # if not title:
-    #     return jsonify({'error': 'Title is required'}), 400
+    # ❌ ОШИБКА №1: логическая — отсутствие валидации → SonarQube (S5146), Bandit (potentially tainted input)
+    # (раньше тут была проверка `if not title: return 400`)
 
-    # ← ошибка №2: добавлен вызов os.system с пользовательским вводом
-    os.system(f"echo {data.get('title', '')}")  # ⚠️ command injection!
+    # ❌ ОШИБКА №2: HIGH-security — os.system с пользовательским вводом → Bandit B605, SonarQube S2078
+    os.system(f"logger 'New task: {title}'")  # ← command injection risk
 
     task = Task(title, data.get('description', ''))
     tasks.append(task)
     return jsonify(task.to_dict()), 201
-
-@app.route('/tasks/<task_id>', methods=['GET'])
-def get_task(task_id):
-    task = find_task(task_id)
-    if not task:
-        return jsonify({'error': 'Task not found'}), 404
-    return jsonify(task.to_dict())
 
 @app.route('/tasks/<task_id>', methods=['PUT'])
 def update_task(task_id):
@@ -86,8 +70,8 @@ def update_task(task_id):
         return jsonify({'error': 'Task not found'}), 404
 
     data = request.get_json()
-    # ← ошибка №3: eval(str(data)) вместо data
-    task.update(eval(str(data)))  # ⚠️ code injection!
+    # Передаём строку JSON → вызовет eval в task.update()
+    task.update(str(data))  # ← триггер для ошибки №3
 
     return jsonify(task.to_dict())
 
@@ -97,9 +81,9 @@ def delete_task(task_id):
     before = len(tasks)
     tasks = [t for t in tasks if t.id != task_id]
     if len(tasks) == before:
-        # ← ошибка №5: убран jsonify → возвращается plain string (нарушает REST)
-        return {'error': 'Task not found'}, 404  # ❌ Flask обернёт в JSON, но неявно — антипаттерн
-    return '', 204  # ← тоже без jsonify — но 204 допустимо; ошибка в 404-ветке
+        # ❌ ОШИБКА №5: нарушение REST — отсутствие jsonify в 404-ответе → SonarQube (S4023)
+        return {'error': 'Task not found'}, 404  # ← неявная сериализация (плохая практика)
+    return '', 204
 
 @app.route('/stats')
 def stats():
@@ -108,15 +92,16 @@ def stats():
     for i in range(n):
         for j in range(i, n):
             total += 1
-    # ← ошибка №4: заменён utcnow() → now()
+    # ❌ ОШИБКА №4 (третья точка): datetime.now() → Code Smell
     return jsonify({
         'task_count': n,
         'nested_ops': total,
-        'timestamp': datetime.now().isoformat()  # ← ошибка №4
+        'timestamp': datetime.now().isoformat()
     })
 
 
 if __name__ == '__main__':
     tasks.append(Task('Купить молоко', 'В магазине за углом'))
     tasks.append(Task('Сделать ПР №4', 'Анализаторы кода'))
+    # ❌ (существующая уязвимость) debug=True → Bandit B201 (HIGH)
     app.run(debug=True, host='127.0.0.1', port=5000)
